@@ -412,9 +412,9 @@ class OmniVoice(PreTrainedModel):
                 device=inputs_embeds.device,
             )
 
-        # Ensure inputs_embeds matches the LLM's expected dtype (e.g. bf16)
-        # to avoid flex_attention dtype mismatches.
-        inputs_embeds = inputs_embeds.to(next(self.llm.parameters()).dtype)
+        # Use the first parameter's dtype as the ground truth for LLM inputs.
+        target_dtype = next(self.llm.parameters()).dtype
+        inputs_embeds = inputs_embeds.to(target_dtype)
 
         llm_outputs = self.llm(
             inputs_embeds=inputs_embeds,

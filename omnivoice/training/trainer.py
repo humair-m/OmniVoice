@@ -87,7 +87,18 @@ class OmniTrainer:
                 "train_micro_batch_size_per_gpu"
             ] = 1
 
-        # 4. Prepare with Accelerator
+        # 4. Explicitly cast model to target dtype if using mixed precision
+        target_dtype = torch.float32
+        if self.config.mixed_precision == "bf16":
+            target_dtype = torch.bfloat16
+        elif self.config.mixed_precision == "fp16":
+            target_dtype = torch.float16
+        
+        if target_dtype != torch.float32:
+            logger.info(f"Casting model to {target_dtype}...")
+            self.model.to(target_dtype)
+
+        # 5. Prepare with Accelerator
         (self.model, self.optimizer, self.lr_scheduler,) = self.accelerator.prepare(
             self.model,
             self.optimizer,
