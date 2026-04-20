@@ -81,9 +81,9 @@ def process_chunk(
 
     manifest_entries = []
     
-    logger.info(f"Downloading and decoding {len(chunk_files)} parquet files...")
-    for pf in tqdm(chunk_files, desc="Parquet Files"):
-        # Download parquet file
+    logger.info(f"Downloading and decoding {len(chunk_files)} source files...")
+    for pf in tqdm(chunk_files, desc="Source Files"):
+        # Download file
         local_pf = hf_hub_download(
             repo_id=args.hf_source_repo,
             repo_type="dataset",
@@ -91,8 +91,18 @@ def process_chunk(
             token=args.hf_token
         )
         
-        # Load dataset from the local parquet
-        ds = load_dataset("parquet", data_files=local_pf, split="train")
+        # Determine dataset type
+        ext = pf.split(".")[-1].lower()
+        if ext == "parquet":
+            ds_type = "parquet"
+        elif ext == "arrow":
+            ds_type = "arrow"
+        else:
+            logger.warning(f"Unsupported file extension: {ext} for file {pf}. Skipping.")
+            continue
+
+        # Load dataset from the local file
+        ds = load_dataset(ds_type, data_files=local_pf, split="train")
         
         for i, row in enumerate(ds):
             try:
@@ -217,10 +227,10 @@ def main():
     
     # List source files
     all_files = list_repo_files(args.hf_source_repo, repo_type="dataset", token=args.hf_token)
-    parquet_files = sorted([f for f in all_files if f.endswith(".parquet")])
+    source_files = sorted([f for f in all_files if f.endswith(".parquet") or f.endswith(".arrow")])
     
-    remaining = [f for f in parquet_files if f not in ledger["processed_parquet_files"]]
-    logger.info(f"Found {len(parquet_files)} parquet files. {len(remaining)} remaining.")
+    remaining = [f for f in source_files if f not in ledger["processed_parquet_files"]]
+    logger.info(f"Found {len(source_files)} valid source files (.parquet/.arrow). {len(remaining)} remaining.")
 
     for i in range(0, len(remaining), args.chunk_size):
         chunk = remaining[i : i + args.chunk_size]
