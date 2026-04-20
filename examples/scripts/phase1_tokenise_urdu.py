@@ -93,10 +93,9 @@ def process_single_file_isolated(pf, args, output_manifest_path, device_str):
     manifest_entries = []
     
     # Pre-setup resampler on GPU if needed
-    # We create it once per file if sr is consistent, but sr can vary
     resamplers = {}
 
-    for i, row in enumerate(ds):
+    for i, row in enumerate(tqdm(ds, desc=f"Samples in {pf}", leave=False)):
         try:
             wav_arr, sr = decode_audio(row, args.audio_col)
             wav_tensor = torch.from_numpy(wav_arr).float()
