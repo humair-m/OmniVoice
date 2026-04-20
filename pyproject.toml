@@ -43,6 +43,8 @@ dependencies = [
     "librosa",
     "huggingface_hub",
     "datasets",
+    "sentencepiece",
+    "tiktoken",
 ]
 
 [project.optional-dependencies]

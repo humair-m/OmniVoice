@@ -1,5 +1,5 @@
 {
-    "llm_name_or_path": "Qwen/Qwen3-0.6B",
+    "llm_name_or_path": "/content/OmniVoice/abc/checkpoint-6000",
     "audio_vocab_size": 1025,
     "audio_mask_id": 1024,
     "num_audio_codebook": 8,
@@ -38,5 +38,5 @@
     "keep_last_n_checkpoints": -1,
 
     "push_to_hub": true,
-    "hub_model_id": "YourOrg/omnivoice-urdu"
+    "hub_model_id": "Humair332/omnivoice-urdu"
 }
