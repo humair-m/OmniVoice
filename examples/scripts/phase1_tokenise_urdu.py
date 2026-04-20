@@ -193,14 +193,16 @@ def process_chunk(chunk_files, args, ledger, api):
     logger.info("Running audio tokenisation...")
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+    env["PYTHONUNBUFFERED"] = "1"
     
     cmd = [
-        "python", "-m", "omnivoice.scripts.extract_audio_tokens",
+        "python", "-u", "-m", "omnivoice.scripts.extract_audio_tokens",
         "--input_jsonl", str(merged_manifest_path),
         "--tar_output_pattern", str(shard_dir / "shard-%06d.tar"),
         "--jsonl_output_pattern", str(shard_dir / "shard-%06d.jsonl"),
         "--tokenizer_path", args.tokenizer_path,
         "--nj_per_gpu", str(args.nj_per_gpu),
+        "--loader_workers", "2",
         "--samples_per_shard", str(1000),
         "--skip_errors"
     ]

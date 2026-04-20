@@ -206,13 +206,13 @@ def process_init(rank_queue, tokenizer_path):
     else:
         worker_device = torch.device("cpu")
 
-    logging.debug(f"Worker process initialized with device: {worker_device}")
+    logging.info(f"Worker process initialized with device: {worker_device}")
     # Load tokenizer onto the specified device
     worker_feature_extractor = AutoFeatureExtractor.from_pretrained(tokenizer_path)
     worker_tokenizer = HiggsAudioV2TokenizerModel.from_pretrained(
-        tokenizer_path, device_map=worker_device
-    )
-    logging.debug(f"Tokenizer loaded successfully on device {worker_device}")
+        tokenizer_path
+    ).to(worker_device)
+    logging.info(f"Tokenizer loaded successfully on device {worker_device}")
 
 
 def process_single_sample(sample: dict[str, Any]) -> dict[str, Any]:
@@ -544,7 +544,12 @@ def main() -> None:
                 f"Skipping failed sample {result['key']}: {result['error_msg']}"
             )
 
-    main_progress = tqdm(total=total_samples, desc="Extracting Audio Tokens")
+    main_progress = tqdm(
+        total=total_samples, 
+        desc="Extracting Audio Tokens",
+        dynamic_ncols=True,
+        leave=True
+    )
 
     try:
         with ProcessPoolExecutor(
@@ -579,7 +584,8 @@ def main() -> None:
                 futures.add(future)
 
             # Process remaining futures
-            logging.info("Processing remaining pending samples...")
+            if futures:
+                main_progress.write("Processing remaining pending samples...")
             while futures:
                 drain_completed()
 
