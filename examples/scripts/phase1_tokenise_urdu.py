@@ -199,6 +199,17 @@ def process_chunk(
     ledger["last_updated"] = datetime.datetime.now().isoformat()
     
     write_ledger(args.ledger_path, ledger)
+    
+    # Upload updated ledger as progress.json to destination repo
+    logger.info("Uploading progress.json to Hub...")
+    api.upload_file(
+        path_or_fileobj=args.ledger_path,
+        path_in_repo="progress.json",
+        repo_id=args.hf_processed_repo,
+        repo_type="dataset",
+        token=args.hf_token
+    )
+    
     logger.info(f"Chunk completed. Next Shard ID: {ledger['next_shard_id']}")
 
 
@@ -210,7 +221,7 @@ def main():
     parser.add_argument("--tokenizer_path", default="eustlb/higgs-audio-v2-tokenizer")
     parser.add_argument("--chunk_size", type=int, default=5)
     parser.add_argument("--output_dir", default="tmp_phase1")
-    parser.add_argument("--ledger_path", default="phase1_ledger.json")
+    parser.add_argument("--ledger_path", default="progress.json")
     parser.add_argument("--gpu_ids", default="0")
     parser.add_argument("--nj_per_gpu", type=int, default=2)
     parser.add_argument("--audio_col", default="audio")
@@ -222,6 +233,25 @@ def main():
 
     api = HfApi(token=args.hf_token)
     api.create_repo(args.hf_processed_repo, repo_type="dataset", exist_ok=True)
+
+    # Remote Ledger Sync: Try to download progress.json from target repo if it exists
+    logger.info(f"Checking for remote progress.json in {args.hf_processed_repo}...")
+    try:
+        processed_repo_files = api.list_repo_files(args.hf_processed_repo, repo_type="dataset")
+        if "progress.json" in processed_repo_files:
+            logger.info("Found remote progress.json. Downloading to resume...")
+            hf_hub_download(
+                repo_id=args.hf_processed_repo,
+                repo_type="dataset",
+                filename="progress.json",
+                local_dir=".",
+                local_dir_use_symlinks=False,
+                token=args.hf_token
+            )
+        else:
+            logger.info("No remote progress.json found. Starting fresh.")
+    except Exception as e:
+        logger.warning(f"Could not sync with remote progress.json (might be empty repo): {e}")
 
     ledger = load_ledger(args.ledger_path)
     
