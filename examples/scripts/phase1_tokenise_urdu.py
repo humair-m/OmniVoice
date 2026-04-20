@@ -112,15 +112,16 @@ def process_single_file_isolated(pf, args, output_manifest_path, device_str):
                 wav_tensor = wav_tensor.to("cpu")
             
             # Save to temp WAV
-            sample_id = row.get("id", f"{pf.replace('/', '_')}_{i}")
+            orig_id = row.get("id", f"{pf.replace('/', '_')}_{i}")
+            sample_id = str(orig_id)
             wav_path = wav_dir / f"{sample_id}.wav"
             torchaudio.save(wav_path, wav_tensor, 24000)
             
-            duration = wav_tensor.shape[1] / 24000
+            duration = float(wav_tensor.shape[1] / 24000)
             manifest_entries.append({
                 "id": sample_id,
                 "audio_path": str(wav_path.absolute()),
-                "text": row[args.text_col],
+                "text": str(row[args.text_col]),
                 "audio_duration": duration,
                 "language_id": "ur",
                 "instruct": "None"
