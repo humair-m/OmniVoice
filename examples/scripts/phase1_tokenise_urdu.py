@@ -204,7 +204,8 @@ def process_chunk(chunk_files, args, ledger, api):
         "--tokenizer_path", args.tokenizer_path,
         "--nj_per_gpu", str(args.nj_per_gpu),
         "--loader_workers", "2",
-        "--samples_per_shard", str(1000),
+        "--samples_per_shard", "5000",
+        "--min_num_shards", "1",
         "--skip_errors"
     ]
     subprocess.run(cmd, env=env, check=True)
