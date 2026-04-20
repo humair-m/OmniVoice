@@ -27,7 +27,7 @@
 
     "batch_tokens": 8192,
     "gradient_accumulation_steps": 1,
-    "num_workers": 4,
+    "num_workers": 2,
 
     "mixed_precision": "bf16",
     "allow_tf32": true,
