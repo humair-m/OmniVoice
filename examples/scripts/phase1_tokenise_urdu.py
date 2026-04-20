@@ -17,14 +17,18 @@
 
 """
 Phase 1: Urdu Data Ingestion & Tokenisation.
-Processes parquet files from a source HF repo, extracts audio tokens,
+Processes parquet/arrow files from a source HF repo, extracts audio tokens,
 and uploads WebDataset shards to a destination HF repo.
+Uses Subprocess Isolation for strict RAM management and GPU for resampling.
 """
 
 import argparse
+import datetime
+import gc
 import io
 import json
 import logging
+import multiprocessing as mp
 import os
 import shutil
 import subprocess
@@ -62,159 +66,177 @@ def decode_audio(row, col):
     raise ValueError(f"Unknown audio format for column {col}")
 
 
-def process_chunk(
-    chunk_files,
-    args,
-    ledger,
-    api
-):
-    """Process a chunk of parquet files: Download -> Decode -> Tokenise -> Upload."""
+def process_single_file_isolated(pf, args, output_manifest_path, device_str):
+    """
+    Subprocess function: Processes a single parquet/arrow file.
+    Runs on a specific device (CPU or GPU).
+    """
+    import gc
+    device = torch.device(device_str)
+    
+    # Download file
+    local_pf = hf_hub_download(
+        repo_id=args.hf_source_repo,
+        repo_type="dataset",
+        filename=pf,
+        token=args.hf_token
+    )
+    
+    # Determine dataset type
+    ext = pf.split(".")[-1].lower()
+    ds_type = "parquet" if ext == "parquet" else "arrow"
+    
+    # Load dataset (memory-mapped)
+    ds = load_dataset(ds_type, data_files=local_pf, split="train", keep_in_memory=False)
+    
+    wav_dir = Path(args.output_dir) / "wavs"
+    manifest_entries = []
+    
+    # Pre-setup resampler on GPU if needed
+    # We create it once per file if sr is consistent, but sr can vary
+    resamplers = {}
+
+    for i, row in enumerate(ds):
+        try:
+            wav_arr, sr = decode_audio(row, args.audio_col)
+            wav_tensor = torch.from_numpy(wav_arr).float()
+            if len(wav_tensor.shape) == 1:
+                wav_tensor = wav_tensor.unsqueeze(0)
+            
+            # Resample to 24kHz using GPU if available
+            if sr != 24000:
+                if sr not in resamplers:
+                    resamplers[sr] = torchaudio.transforms.Resample(orig_freq=sr, new_freq=24000).to(device)
+                
+                wav_tensor = wav_tensor.to(device)
+                wav_tensor = resamplers[sr](wav_tensor)
+                wav_tensor = wav_tensor.to("cpu")
+            
+            # Save to temp WAV
+            sample_id = row.get("id", f"{pf.replace('/', '_')}_{i}")
+            wav_path = wav_dir / f"{sample_id}.wav"
+            torchaudio.save(wav_path, wav_tensor, 24000)
+            
+            duration = wav_tensor.shape[1] / 24000
+            manifest_entries.append({
+                "id": sample_id,
+                "audio_path": str(wav_path.absolute()),
+                "text": row[args.text_col],
+                "audio_duration": duration,
+                "language_id": "ur",
+                "instruct": "None"
+            })
+        except Exception as e:
+            pass # logging might be tricky in subprocess, keep it simple
+
+    # Write partial manifest for this file
+    with open(output_manifest_path, "w", encoding="utf-8") as f:
+        for entry in manifest_entries:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    
+    # Cleanup
+    del ds
+    del manifest_entries
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+
+def process_chunk(chunk_files, args, ledger, api):
+    """Process a chunk of files using subprocess isolation for RAM safety."""
     output_dir = Path(args.output_dir)
     wav_dir = output_dir / "wavs"
     shard_dir = output_dir / "shards"
     
-    # Cleanup and recreate dirs
     if output_dir.exists():
         shutil.rmtree(output_dir)
     wav_dir.mkdir(parents=True)
     shard_dir.mkdir(parents=True)
 
-    manifest_entries = []
+    gpu_id = args.gpu_ids.split(",")[0]
+    device_str = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
     
-    logger.info(f"Downloading and decoding {len(chunk_files)} source files...")
-    for pf in tqdm(chunk_files, desc="Source Files"):
-        # Download file
-        local_pf = hf_hub_download(
-            repo_id=args.hf_source_repo,
-            repo_type="dataset",
-            filename=pf,
-            token=args.hf_token
+    ctx = mp.get_context("spawn")
+    partial_manifests = []
+    
+    logger.info(f"Processing chunk of {len(chunk_files)} files with isolation...")
+    for pf in tqdm(chunk_files, desc="Files in Chunk"):
+        partial_manifest_path = output_dir / f"manifest_{pf.replace('/', '_')}.jsonl"
+        
+        # Start subprocess
+        p = ctx.Process(
+            target=process_single_file_isolated,
+            args=(pf, args, partial_manifest_path, device_str)
         )
+        p.start()
+        p.join()
         
-        # Determine dataset type
-        ext = pf.split(".")[-1].lower()
-        if ext == "parquet":
-            ds_type = "parquet"
-        elif ext == "arrow":
-            ds_type = "arrow"
-        else:
-            logger.warning(f"Unsupported file extension: {ext} for file {pf}. Skipping.")
-            continue
+        if p.exitcode != 0:
+            logger.error(f"Subprocess failed for {pf} with exit code {p.exitcode}")
+        elif partial_manifest_path.exists():
+            partial_manifests.append(partial_manifest_path)
+            
+        # Hard GC in parent too
+        gc.collect()
 
-        # Load dataset from the local file
-        ds = load_dataset(ds_type, data_files=local_pf, split="train")
-        
-        for i, row in enumerate(ds):
-            try:
-                wav_arr, sr = decode_audio(row, args.audio_col)
-                wav_tensor = torch.from_numpy(wav_arr).float()
-                if len(wav_tensor.shape) == 1:
-                    wav_tensor = wav_tensor.unsqueeze(0)
-                
-                # Resample to 24kHz
-                if sr != 24000:
-                    resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=24000)
-                    wav_tensor = resampler(wav_tensor)
-                
-                # Save to temp WAV
-                sample_id = row.get("id", f"{pf.replace('/', '_')}_{i}")
-                wav_path = wav_dir / f"{sample_id}.wav"
-                torchaudio.save(wav_path, wav_tensor, 24000)
-                
-                duration = wav_tensor.shape[1] / 24000
-                manifest_entries.append({
-                    "id": sample_id,
-                    "audio_path": str(wav_path.absolute()),
-                    "text": row[args.text_col],
-                    "audio_duration": duration,
-                    "language_id": "ur",
-                    "instruct": "None"
-                })
-            except Exception as e:
-                logger.error(f"Failed to process row {i} in {pf}: {e}")
+    # Merge partial manifests
+    merged_manifest_path = output_dir / "chunk_manifest.jsonl"
+    with open(merged_manifest_path, "w", encoding="utf-8") as out_f:
+        for p_man in partial_manifests:
+            with open(p_man, "r") as in_f:
+                shutil.copyfileobj(in_f, out_f)
 
-    if not manifest_entries:
+    if not merged_manifest_path.exists() or merged_manifest_path.stat().st_size == 0:
         logger.warning("No valid entries in this chunk. Skipping.")
         return
 
-    # Write temp JSONL manifest
-    manifest_path = output_dir / "chunk_manifest.jsonl"
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        for entry in manifest_entries:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-    # Run tokenisation script as a subprocess
+    # Run tokenisation
     logger.info("Running audio tokenisation...")
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
     
     cmd = [
         "python", "-m", "omnivoice.scripts.extract_audio_tokens",
-        "--input_jsonl", str(manifest_path),
+        "--input_jsonl", str(merged_manifest_path),
         "--tar_output_pattern", str(shard_dir / "shard-%06d.tar"),
         "--jsonl_output_pattern", str(shard_dir / "shard-%06d.jsonl"),
         "--tokenizer_path", args.tokenizer_path,
         "--nj_per_gpu", str(args.nj_per_gpu),
-        "--samples_per_shard", str(1000), # Fixed for now
+        "--samples_per_shard", str(1000),
         "--skip_errors"
     ]
-    
     subprocess.run(cmd, env=env, check=True)
 
-    # Rename shards using global counter
+    # Rename and upload shards
     produced_shards = sorted(glob(str(shard_dir / "*.tar")))
     num_shards = len(produced_shards)
     start_id = ledger["next_shard_id"]
     
-    logger.info(f"Renaming and uploading {num_shards} shards starting from ID {start_id}...")
     for i, tar_file in enumerate(produced_shards):
         global_id = start_id + i
         new_tar = shard_dir / f"shard-{global_id:06d}.tar"
         new_jsonl = shard_dir / f"shard-{global_id:06d}.jsonl"
-        
         os.rename(tar_file, new_tar)
         os.rename(tar_file.replace(".tar", ".jsonl"), new_jsonl)
         
-        # Upload
-        api.upload_file(
-            path_or_fileobj=str(new_tar),
-            path_in_repo=f"data/{new_tar.name}",
-            repo_id=args.hf_processed_repo,
-            repo_type="dataset",
-            token=args.hf_token
-        )
-        api.upload_file(
-            path_or_fileobj=str(new_jsonl),
-            path_in_repo=f"data/{new_jsonl.name}",
-            repo_id=args.hf_processed_repo,
-            repo_type="dataset",
-            token=args.hf_token
-        )
+        api.upload_file(path_or_fileobj=str(new_tar), path_in_repo=f"data/{new_tar.name}", 
+                        repo_id=args.hf_processed_repo, repo_type="dataset", token=args.hf_token)
+        api.upload_file(path_or_fileobj=str(new_jsonl), path_in_repo=f"data/{new_jsonl.name}", 
+                        repo_id=args.hf_processed_repo, repo_type="dataset", token=args.hf_token)
 
-    # Update ledger
+    # Update ledger and remote progress.json
     ledger["processed_parquet_files"].extend(chunk_files)
     ledger["next_shard_id"] += num_shards
-    ledger["last_updated"] = torch.datetime.datetime.now().isoformat() if hasattr(torch, "datetime") else "" # Fallback
-    import datetime
     ledger["last_updated"] = datetime.datetime.now().isoformat()
-    
     write_ledger(args.ledger_path, ledger)
     
-    # Upload updated ledger as progress.json to destination repo
-    logger.info("Uploading progress.json to Hub...")
-    api.upload_file(
-        path_or_fileobj=args.ledger_path,
-        path_in_repo="progress.json",
-        repo_id=args.hf_processed_repo,
-        repo_type="dataset",
-        token=args.hf_token
-    )
-    
+    api.upload_file(path_or_fileobj=args.ledger_path, path_in_repo="progress.json",
+                    repo_id=args.hf_processed_repo, repo_type="dataset", token=args.hf_token)
     logger.info(f"Chunk completed. Next Shard ID: {ledger['next_shard_id']}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 1: Urdu Tokenisation")
+    parser = argparse.ArgumentParser(description="Phase 1: Urdu Tokenisation (Hardware Optimized)")
     parser.add_argument("--hf_source_repo", default="Humair332/Urdu-munch-1")
     parser.add_argument("--hf_token", default=os.environ.get("HF_TOKEN"))
     parser.add_argument("--hf_processed_repo", required=True)
@@ -228,51 +250,26 @@ def main():
     parser.add_argument("--text_col", default="text")
     args = parser.parse_args()
 
-    if not args.hf_token:
-        raise ValueError("HF_TOKEN must be provided via --hf_token or HF_TOKEN env var.")
-
     api = HfApi(token=args.hf_token)
     api.create_repo(args.hf_processed_repo, repo_type="dataset", exist_ok=True)
 
-    # Remote Ledger Sync: Try to download progress.json from target repo if it exists
-    logger.info(f"Checking for remote progress.json in {args.hf_processed_repo}...")
+    # Sync remote progress
     try:
-        processed_repo_files = api.list_repo_files(args.hf_processed_repo, repo_type="dataset")
-        if "progress.json" in processed_repo_files:
-            logger.info("Found remote progress.json. Downloading to resume...")
-            hf_hub_download(
-                repo_id=args.hf_processed_repo,
-                repo_type="dataset",
-                filename="progress.json",
-                local_dir=".",
-                local_dir_use_symlinks=False,
-                token=args.hf_token
-            )
-        else:
-            logger.info("No remote progress.json found. Starting fresh.")
-    except Exception as e:
-        logger.warning(f"Could not sync with remote progress.json (might be empty repo): {e}")
+        if "progress.json" in api.list_repo_files(args.hf_processed_repo, repo_type="dataset"):
+            hf_hub_download(repo_id=args.hf_processed_repo, repo_type="dataset", filename="progress.json",
+                            local_dir=".", local_dir_use_symlinks=False, token=args.hf_token)
+    except Exception: pass
 
     ledger = load_ledger(args.ledger_path)
-    
-    # List source files
     all_files = list_repo_files(args.hf_source_repo, repo_type="dataset", token=args.hf_token)
-    source_files = sorted([f for f in all_files if f.endswith(".parquet") or f.endswith(".arrow")])
+    valid_files = sorted([f for f in all_files if f.endswith(".parquet") or f.endswith(".arrow")])
+    remaining = [f for f in valid_files if f not in ledger["processed_parquet_files"]]
     
-    remaining = [f for f in source_files if f not in ledger["processed_parquet_files"]]
-    logger.info(f"Found {len(source_files)} valid source files (.parquet/.arrow). {len(remaining)} remaining.")
-
+    logger.info(f"Found {len(valid_files)} files. {len(remaining)} remaining.")
     for i in range(0, len(remaining), args.chunk_size):
-        chunk = remaining[i : i + args.chunk_size]
-        logger.info(f"Processing chunk {i//args.chunk_size + 1}: {chunk}")
-        process_chunk(chunk, args, ledger, api)
-        
-        # Explicit cleanup after each chunk
+        process_chunk(remaining[i : i + args.chunk_size], args, ledger, api)
         if os.path.exists(args.output_dir):
             shutil.rmtree(args.output_dir)
-
-    logger.info("Phase 1 Complete.")
-
 
 if __name__ == "__main__":
     main()
