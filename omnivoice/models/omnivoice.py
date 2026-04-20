@@ -183,10 +183,25 @@ class OmniVoiceConfig(PretrainedConfig):
 
 
 def _resolve_model_path(name_or_path: str) -> str:
-    if os.path.isdir(name_or_path):
-        return name_or_path
-    from huggingface_hub import snapshot_download
+    """Resolve a model name or path. 
+    If a local path exists, return it. Otherwise, download from HF Hub.
+    """
+    # Expand ~ and environment variables
+    expanded_path = os.path.expanduser(os.path.expandvars(name_or_path))
+    
+    if os.path.exists(expanded_path):
+        return expanded_path
+        
+    # If it looks like a local path (starts with / or .) but doesn't exist,
+    # don't try to download from HF Hub - raise a clear local error.
+    if expanded_path.startswith("/") or expanded_path.startswith("./") or expanded_path.startswith("../"):
+        raise FileNotFoundError(
+            f"Local model path not found: {expanded_path}. "
+            f"Please check if the path in your config is correct."
+        )
 
+    # Otherwise, assume it's a HuggingFace Hub repo ID
+    from huggingface_hub import snapshot_download
     return snapshot_download(name_or_path)
 
 
