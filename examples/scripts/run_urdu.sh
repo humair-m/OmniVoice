@@ -3,14 +3,14 @@
 set -euo pipefail
 
 # ===== Configure =====
-GPU_IDS="0,1,2,3,4,5,6,7"
-NUM_GPUS=8
+GPU_IDS="0"
+NUM_GPUS=1
 TRAIN_CONFIG="examples/config/train_config_urdu.json"
 DATA_CONFIG_TEMPLATE="examples/config/data_config_urdu.json"
 RESOLVED_DATA_CONFIG="examples/config/data_config_urdu_resolved.json"
 OUTPUT_DIR="exp/omnivoice_urdu"
-HF_PROCESSED_REPO="YourOrg/urdu-omnivoice-tokens"   # output of Phase 1
-HF_MODEL_REPO="YourOrg/omnivoice-urdu"              # checkpoints go here
+HF_PROCESSED_REPO="Humair332/urdu-omnivoice-tokens"   # output of Phase 1
+HF_MODEL_REPO="Humair332/omnivoice-urdu"              # checkpoints go here
 # =====================
 
 # Ensure we're in the repo root
