@@ -41,6 +41,8 @@ dependencies = [
     "numpy",
     "soundfile",
     "librosa",
+    "huggingface_hub",
+    "datasets",
 ]
 
 [project.optional-dependencies]

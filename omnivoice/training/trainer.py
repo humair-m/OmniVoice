@@ -41,6 +41,7 @@ from transformers import (
 
 from omnivoice.training.checkpoint import TrainLogger, load_checkpoint
 from omnivoice.training.checkpoint import save_checkpoint as engine_save_checkpoint
+from huggingface_hub import HfApi, snapshot_download
 
 logger = logging.getLogger(__name__)
 
@@ -199,9 +200,53 @@ class OmniTrainer:
             checkpoint_dir = os.path.join(self.config.output_dir, f"checkpoint-{step}")
             self.config.save_to_json(os.path.join(checkpoint_dir, "train_config.json"))
 
+        # 5. Push to HF Hub if enabled
+        if self.config.push_to_hub and self.accelerator.is_main_process:
+            try:
+                token = self.config.hub_token or os.environ.get("HF_TOKEN")
+                api = HfApi(token=token)
+                repo = self.config.hub_model_id
+                api.create_repo(repo, repo_type="model", exist_ok=True)
+                api.upload_folder(
+                    folder_path=checkpoint_dir,
+                    repo_id=repo,
+                    repo_type="model",
+                    path_in_repo=f"checkpoint-{step}",
+                    commit_message=f"checkpoint step {step}",
+                )
+                logger.info(f"Pushed checkpoint-{step} to {repo}")
+            except Exception as e:
+                logger.error(f"Failed to push checkpoint to HF Hub: {e}")
+
     def load_checkpoint(self, checkpoint_path):
-        """Wrapper for loading."""
-        step = load_checkpoint(self.accelerator, checkpoint_path)
+        """Wrapper for loading, supporting local paths and HF Hub refs."""
+        local_path = checkpoint_path
+        if not os.path.exists(checkpoint_path):
+            # Try HF Hub format: "repo_id" or "repo_id:subfolder"
+            if self.accelerator.is_main_process:
+                logger.info(f"Resolving HF checkpoint: {checkpoint_path}")
+                if ":" in checkpoint_path:
+                    repo_id, subfolder = checkpoint_path.split(":", 1)
+                else:
+                    repo_id, subfolder = checkpoint_path, None
+                
+                local_path = snapshot_download(
+                    repo_id=repo_id,
+                    repo_type="model",
+                    allow_patterns=[f"{subfolder}/*"] if subfolder else None,
+                    token=self.config.hub_token or os.environ.get("HF_TOKEN"),
+                )
+                if subfolder:
+                    local_path = os.path.join(local_path, subfolder)
+            
+            # Broadcast path to all processes
+            if self.accelerator.state.num_processes > 1:
+                from accelerate.utils import broadcast_object_list
+                path_list = [local_path]
+                broadcast_object_list(path_list)
+                local_path = path_list[0]
+
+        step = load_checkpoint(self.accelerator, local_path)
         self.global_step = step
         logger.info(f"Resumed from step {self.global_step}")
         return step
@@ -247,6 +292,15 @@ class OmniTrainer:
         # Resume if configured
         if self.config.resume_from_checkpoint:
             self.load_checkpoint(self.config.resume_from_checkpoint)
+
+        # Skip batches if resuming
+        if self.global_step > 0:
+            # Note: For WebDataset, skip_first_batches is preferred for exact resumption
+            # but depends on deterministic shuffling/splitting.
+            logger.info(f"Skipping first {self.global_step} batches for resumption...")
+            self.train_dataloader = self.accelerator.skip_first_batches(
+                self.train_dataloader, self.global_step
+            )
 
         # Handle IterableDataset Epochs
         if hasattr(self.train_dataloader.dataset, "set_epoch"):

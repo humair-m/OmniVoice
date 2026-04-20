@@ -83,6 +83,11 @@ class TrainingConfig:
     save_steps: int = 10000
     keep_last_n_checkpoints: int = -1
 
+    # HuggingFace Hub
+    push_to_hub: bool = False
+    hub_model_id: Optional[str] = None
+    hub_token: Optional[str] = None
+
     @classmethod
     def from_json(cls, json_path: str):
         with open(json_path, "r") as f:

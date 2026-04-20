@@ -1,0 +1,10 @@
+{
+  "train": [
+    {
+      "name": "urdu_train",
+      "audio_shards": [],
+      "weight": 1.0
+    }
+  ],
+  "dev": []
+}

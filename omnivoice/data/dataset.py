@@ -136,22 +136,44 @@ def prepare_data_manifests_from_json(
     with open(data_config, "r", encoding="utf-8") as f:
         data = json.load(f)
         for item in data["train"]:
-            manifest_paths = item["manifest_path"]
+            manifest_paths = item.get("manifest_path", [])
+            audio_shards = item.get("audio_shards", [])
             repeat = item.get("repeat", 1)
+            
             for manifest_path in manifest_paths:
-                # assert manifest_path is a file
                 assert os.path.isfile(manifest_path), f"{manifest_path} is not a file."
                 train_manifests.extend(
                     webdataset_manifest_reader(manifest_path) * repeat
                 )
+            
+            # Support direct shard lists (e.g. from dynamic discovery)
+            if audio_shards:
+                # Format: (tar_path, label_jsonl_path, num_items, num_seconds)
+                # For direct shards, we might not have label_path or counts.
+                # However, WebDatasetReader expects them.
+                # If they are URLs, we'll use dummy counts if not provided.
+                for shard in audio_shards:
+                    # If it's a string, assume it's the tar path.
+                    # We'll try to find a matching .jsonl if it's a URL/pattern.
+                    tar_path = shard
+                    label_path = shard.replace(".tar", ".jsonl") if ".tar" in shard else ""
+                    # WebDatasetReader needs these for stats and shuffle buffer
+                    train_manifests.append((tar_path, label_path, 1000, 3600.0)) # Dummy defaults
+
         if "dev" in data:
             for item in data["dev"]:
-                manifest_paths = item["manifest_path"]
+                manifest_paths = item.get("manifest_path", [])
+                audio_shards = item.get("audio_shards", [])
                 repeat = item.get("repeat", 1)
                 for manifest_path in manifest_paths:
                     dev_manifests.extend(
                         webdataset_manifest_reader(manifest_path) * repeat
                     )
+                if audio_shards:
+                    for shard in audio_shards:
+                        tar_path = shard
+                        label_path = shard.replace(".tar", ".jsonl") if ".tar" in shard else ""
+                        dev_manifests.append((tar_path, label_path, 1000, 3600.0))
     return train_manifests, dev_manifests
 
 
@@ -218,22 +240,17 @@ class SampleDecoder:
 
     def __call__(self, sample):
         return_dict = {}
-        src = sample["__url__"]
-        key = sample["__key__"]
-        if (
-            self.label_dataset is None
-            or self.label_dataset.path != self.tar_to_label[src]
-        ):
-            self.label_dataset = LabelDataset(self.tar_to_label[src])
-
-        audio = torch.empty(0)
+        src = sample.get("__url__", "unknown")
+        key = sample.get("__key__", "unknown")
+        
+        # 1. Load Audio/Tokens
         if "npy" in sample:
             audio_tokens = torch.from_numpy(sample["npy"])
             return_dict["audio_tokens"] = audio_tokens
         else:
+            audio = torch.empty(0)
             for ext in self.audio_format:
                 if ext in sample:
-                    # load audio (1, num_samples)
                     audio = load_audio_webdataset(
                         sample[ext], sample_rate=self.sample_rate
                     )
@@ -243,8 +260,28 @@ class SampleDecoder:
             return_dict["audio"] = audio
             return_dict["audio_duration"] = audio.size(-1) / self.sample_rate
 
-        label = self.label_dataset[key]
-
+        # 2. Load Label (Prioritize internal JSON, fallback to external JSONL)
+        label = {}
+        if "json" in sample:
+            label = sample["json"] # WebDataset.decode() handles json bytes -> dict
+        elif self.tar_to_label:
+            target_label_path = self.tar_to_label.get(src)
+            if target_label_path:
+                if (
+                    self.label_dataset is None
+                    or self.label_dataset.path != target_label_path
+                ):
+                    try:
+                        self.label_dataset = LabelDataset(target_label_path)
+                    except Exception as e:
+                        logging.warning(f"Failed to load external label {target_label_path}: {e}")
+                
+                if self.label_dataset:
+                    try:
+                        label = self.label_dataset[key]
+                    except KeyError:
+                        logging.warning(f"Key {key} not found in external label {target_label_path}")
+        
         return_dict["label"] = label
         return return_dict
 

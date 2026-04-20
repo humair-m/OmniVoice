@@ -499,7 +499,14 @@ def main() -> None:
         try:
             token_record = serialise_numpy(key, audio_tokens_np)
             json_record = _encode_metadata(metadata)
-            tar_writer.write(token_record)
+            
+            # Combine into a single record with both .npy and .json extensions
+            sample_record = {
+                "__key__": key,
+                "npy": token_record["npy"],
+                "json": json_record
+            }
+            tar_writer.write(sample_record)
             jsonl_file.write(json_record.decode("utf-8") + "\n")
             shard_sample_count += 1
             shard_duration += metadata.get("audio_duration", 0.0)
