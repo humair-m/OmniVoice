@@ -93,6 +93,12 @@ def build_model_and_tokenizer(
     else:
         resolved_llm = _resolve_model_path(model_source)
         llm_config = AutoConfig.from_pretrained(resolved_llm)
+        
+        # If we loaded an OmniVoiceConfig (e.g. from a checkpoint), 
+        # extract the underlying llm_config.
+        if isinstance(llm_config, OmniVoiceConfig):
+            logger.info("Detected OmniVoiceConfig in checkpoint, extracting base LLM config.")
+            llm_config = llm_config.llm_config
 
         ov_config = OmniVoiceConfig(
             audio_vocab_size=config.audio_vocab_size,
