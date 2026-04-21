@@ -292,14 +292,12 @@ class OmniTrainer:
         if self.config.resume_from_checkpoint:
             self.load_checkpoint(self.config.resume_from_checkpoint)
 
-        # Skip batches if resuming
+        # When resuming, don't skip data — just shuffle to get a fresh ordering.
+        # Model, optimizer and scheduler states are already restored from checkpoint.
         if self.global_step > 0:
-            # Note: For WebDataset, skip_first_batches is preferred for exact resumption
-            # but depends on deterministic shuffling/splitting.
-            logger.info(f"Skipping first {self.global_step} batches for resumption...")
-            self.train_dataloader = self.accelerator.skip_first_batches(
-                self.train_dataloader, self.global_step
-            )
+            logger.info(f"Resumed from step {self.global_step}. Shuffling dataset for fresh start...")
+            if hasattr(self.train_dataloader.dataset, "set_epoch"):
+                self.train_dataloader.dataset.set_epoch(self.global_step)
 
         # Handle IterableDataset Epochs
         if hasattr(self.train_dataloader.dataset, "set_epoch"):
