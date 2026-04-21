@@ -41,7 +41,8 @@ from transformers import (
 
 from omnivoice.training.checkpoint import TrainLogger, load_checkpoint
 from omnivoice.training.checkpoint import save_checkpoint as engine_save_checkpoint
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import HfApi
+from omnivoice.models.omnivoice import _resolve_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -231,32 +232,19 @@ class OmniTrainer:
 
     def load_checkpoint(self, checkpoint_path):
         """Wrapper for loading, supporting local paths and HF Hub refs."""
-        local_path = checkpoint_path
-        if not os.path.exists(checkpoint_path):
-            # Try HF Hub format: "repo_id" or "repo_id:subfolder"
-            if self.accelerator.is_main_process:
-                logger.info(f"Resolving HF checkpoint: {checkpoint_path}")
-                if ":" in checkpoint_path:
-                    repo_id, subfolder = checkpoint_path.split(":", 1)
-                else:
-                    repo_id, subfolder = checkpoint_path, None
-                
-                local_path = snapshot_download(
-                    repo_id=repo_id,
-                    repo_type="model",
-                    allow_patterns=[f"{subfolder}/*"] if subfolder else None,
-                    token=self.config.hub_token or os.environ.get("HF_TOKEN"),
-                )
-                if subfolder:
-                    local_path = os.path.join(local_path, subfolder)
+        # 1. Resolve path (main process only downloads, others wait)
+        local_path = ""
+        if self.accelerator.is_main_process:
+            local_path = _resolve_model_path(checkpoint_path)
             
-            # Broadcast path to all processes
-            if self.accelerator.state.num_processes > 1:
-                from accelerate.utils import broadcast_object_list
-                path_list = [local_path]
-                broadcast_object_list(path_list)
-                local_path = path_list[0]
+        # 2. Broadcast path to all processes if distributed
+        if self.accelerator.state.num_processes > 1:
+            from accelerate.utils import broadcast_object_list
+            path_list = [local_path]
+            broadcast_object_list(path_list)
+            local_path = path_list[0]
 
+        # 3. Load via accelerator
         step = load_checkpoint(self.accelerator, local_path)
         self.global_step = step
         logger.info(f"Resumed from step {self.global_step}")

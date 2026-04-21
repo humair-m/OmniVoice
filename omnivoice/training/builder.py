@@ -52,13 +52,18 @@ def build_model_and_tokenizer(
     """Load Tokenizer and Model, handle resizing and special tokens."""
     logger.info("Initializing Model & Tokenizer...")
 
-    # 1. Tokenizer
-    tokenizer_path = (
-        config.init_from_checkpoint
-        if config.init_from_checkpoint
-        else config.llm_name_or_path
-    )
-    tokenizer_path = _resolve_model_path(tokenizer_path)
+    # 1. Resolve Tokenizer & Config Source
+    model_source = config.llm_name_or_path
+    if not model_source:
+        model_source = config.init_from_checkpoint or config.resume_from_checkpoint
+        
+    if not model_source:
+        raise ValueError(
+            "llm_name_or_path is null, and no checkpoint (init_from_checkpoint "
+            "or resume_from_checkpoint) was provided to derive the architecture from."
+        )
+
+    tokenizer_path = _resolve_model_path(model_source)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -86,7 +91,7 @@ def build_model_and_tokenizer(
             train=True,
         )
     else:
-        resolved_llm = _resolve_model_path(config.llm_name_or_path)
+        resolved_llm = _resolve_model_path(model_source)
         llm_config = AutoConfig.from_pretrained(resolved_llm)
 
         ov_config = OmniVoiceConfig(

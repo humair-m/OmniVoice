@@ -184,14 +184,36 @@ class OmniVoiceConfig(PretrainedConfig):
 
 def _resolve_model_path(name_or_path: str) -> str:
     """Resolve a model name or path. 
-    If a local path exists, return it. Otherwise, download from HF Hub.
+    If a local path exists, return it.
+    If it follows 'repo_id:subfolder' format, download from HF Hub.
+    Otherwise, download the full repo from HF Hub.
     """
+    if not name_or_path:
+        return ""
+
     # Expand ~ and environment variables
     expanded_path = os.path.expanduser(os.path.expandvars(name_or_path))
     
     if os.path.exists(expanded_path):
         return expanded_path
         
+    # Handle Hub paths
+    from huggingface_hub import snapshot_download
+    
+    # Check for 'repo_id:subfolder' syntax
+    if ":" in name_or_path and not name_or_path.startswith("/") and not name_or_path.startswith("."):
+        repo_id, subfolder = name_or_path.split(":", 1)
+        logger.info(f"Resolving HF checkpoint subfolder: {subfolder} in {repo_id}")
+        local_path = snapshot_download(
+            repo_id=repo_id,
+            repo_type="model",
+            allow_patterns=[f"{subfolder}/*"] if subfolder else None,
+            token=os.environ.get("HF_TOKEN"),
+        )
+        if subfolder:
+            return os.path.join(local_path, subfolder)
+        return local_path
+
     # If it looks like a local path (starts with / or .) but doesn't exist,
     # don't try to download from HF Hub - raise a clear local error.
     if expanded_path.startswith("/") or expanded_path.startswith("./") or expanded_path.startswith("../"):
@@ -200,9 +222,8 @@ def _resolve_model_path(name_or_path: str) -> str:
             f"Please check if the path in your config is correct."
         )
 
-    # Otherwise, assume it's a HuggingFace Hub repo ID
-    from huggingface_hub import snapshot_download
-    return snapshot_download(name_or_path)
+    # Otherwise, assume it's a standard HuggingFace Hub repo ID
+    return snapshot_download(name_or_path, token=os.environ.get("HF_TOKEN"))
 
 
 class OmniVoice(PreTrainedModel):
