@@ -82,23 +82,26 @@ def build_model_and_tokenizer(
     if tokens_to_add:
         tokenizer.add_special_tokens({"additional_special_tokens": tokens_to_add})
 
-    if config.init_from_checkpoint:
-        logger.info(f"Loading weights from {config.init_from_checkpoint}")
+    # 2. Build Model
+    # Determine if we are loading from an OmniVoice checkpoint or a base LLM
+    checkpoint_to_load = config.init_from_checkpoint
+    if not checkpoint_to_load and not config.llm_name_or_path:
+        checkpoint_to_load = config.resume_from_checkpoint
+
+    if checkpoint_to_load:
+        logger.info(f"Loading OmniVoice model from checkpoint: {checkpoint_to_load}")
+        resolved_ckpt = _resolve_model_path(checkpoint_to_load)
         model = OmniVoice.from_pretrained(
-            config.init_from_checkpoint,
+            resolved_ckpt,
             attn_implementation="flex_attention",
             dtype=torch.float32,
             train=True,
         )
     else:
-        resolved_llm = _resolve_model_path(model_source)
+        # Base LLM path provided
+        logger.info(f"Initializing OmniVoice from base LLM: {config.llm_name_or_path}")
+        resolved_llm = _resolve_model_path(config.llm_name_or_path)
         llm_config = AutoConfig.from_pretrained(resolved_llm)
-        
-        # If we loaded an OmniVoiceConfig (e.g. from a checkpoint), 
-        # extract the underlying llm_config.
-        if isinstance(llm_config, OmniVoiceConfig):
-            logger.info("Detected OmniVoiceConfig in checkpoint, extracting base LLM config.")
-            llm_config = llm_config.llm_config
 
         ov_config = OmniVoiceConfig(
             audio_vocab_size=config.audio_vocab_size,
