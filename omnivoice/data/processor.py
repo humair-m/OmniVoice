@@ -91,26 +91,17 @@ class OmniVoiceSampleProcessor:
 
         # --- Style ---
         style = ""
-        def _clean(val):
-            """Treat Python None and the string 'None' as empty."""
-            if val is None or val == "None":
-                return ""
-            return val
 
-        if use_language:
-            language = _clean(sample["label"].get("language_id"))
-        else:
+        # Language: always include the tag; use dataset value or empty string
+        language = sample["label"].get("language_id") or ""
+        if language == "None":
             language = ""
-        if use_instruct:
-            instruct = _clean(sample["label"].get("instruct"))
-        else:
-            instruct = ""
 
         if "clean_start_token_idx" in sample["label"]:
             style += "<|denoise|>"
 
         style += f"<|lang_start|>{language}<|lang_end|>"
-        style += f"<|instruct_start|>{instruct}<|instruct_end|>"
+        # instruct tokens removed — not used for Urdu pretraining
 
         style_inputs = self.text_tokenizer(style, return_tensors="pt").input_ids.repeat(
             self.num_channels, 1
