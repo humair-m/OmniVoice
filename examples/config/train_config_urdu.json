@@ -1,9 +1,8 @@
 {
-    "llm_name_or_path": "/content/OmniVoice/abc/checkpoint-6000",
+    "llm_name_or_path": null,
     "audio_vocab_size": 1025,
     "audio_mask_id": 1024,
     "num_audio_codebook": 8,
-
     "audio_codebook_weights": [8, 8, 6, 6, 4, 4, 2, 2],
     "drop_cond_ratio": 0.1,
     "prompt_ratio_range": [0.0, 0.3],
@@ -12,31 +11,25 @@
     "use_pinyin_ratio": 0.0,
     "instruct_ratio": 0.0,
     "only_instruct_ratio": 0.0,
-
-    "resume_from_checkpoint": null,
+    "resume_from_checkpoint": "Humair332/omnivoice-urdu:checkpoint-9000",
     "init_from_checkpoint": null,
-
     "learning_rate": 1e-4,
     "weight_decay": 0.01,
     "max_grad_norm": 1.0,
     "steps": 300000,
     "seed": 42,
     "warmup_type": "ratio",
-    "warmup_ratio": 0.03,
+    "warmup_ratio": 0.0,
     "warmup_steps": 0,
-
     "batch_tokens": 8192,
-    "gradient_accumulation_steps": 1,
+    "gradient_accumulation_steps": 2,
     "num_workers": 2,
-
-    "mixed_precision": "bf16",
-    "allow_tf32": true,
-
+    "mixed_precision": "no",
+    "allow_tf32": false,
     "logging_steps": 50,
     "eval_steps": 500,
     "save_steps": 1000,
     "keep_last_n_checkpoints": -1,
-
     "push_to_hub": true,
     "hub_model_id": "Humair332/omnivoice-urdu"
 }

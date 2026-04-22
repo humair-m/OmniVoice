@@ -57,6 +57,7 @@ def build_model_and_tokenizer(
     if not model_source:
         model_source = config.init_from_checkpoint or config.resume_from_checkpoint
         
+    logger.info(f"🔍 Model source resolved to: '{model_source}'")
     if not model_source:
         raise ValueError(
             "llm_name_or_path is null, and no checkpoint (init_from_checkpoint "
