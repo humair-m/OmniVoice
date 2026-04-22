@@ -121,14 +121,27 @@ def main():
         if i >= args.num_samples:
             break
 
-        text      = sample.get("text", "N/A")
-        lang      = sample.get("language_id", "N/A")
-        num_tokens = sample.get("num_tokens", "N/A")
-        duration  = sample.get("audio_duration", "N/A")
-        tokens    = sample.get("tokens")
+        # The raw WebDataset gives us: audio_tokens, label (JSON bytes), __key__
+        # Decode the label JSON to get text, language_id, etc.
+        label = sample.get("label", {})
+        if isinstance(label, (bytes, str)):
+            import json as _json
+            try:
+                label = _json.loads(label)
+            except Exception:
+                label = {}
+
+        text       = label.get("text", "N/A")
+        lang       = label.get("language_id", "N/A")
+        instruct   = label.get("instruct", "N/A")
+        num_tokens = label.get("num_tokens", "N/A")
+        duration   = label.get("audio_duration", "N/A")
+        tokens     = sample.get("audio_tokens")
 
         print(f"\n[Sample {i + 1}]")
+        print(f"  __key__      : {sample.get('__key__', 'N/A')}")
         print(f"  language_id  : {lang}")
+        print(f"  instruct     : {instruct}")
         print(f"  text         : {str(text)[:300]}")
         if isinstance(duration, float):
             print(f"  audio_dur    : {duration:.2f}s")
@@ -139,7 +152,7 @@ def main():
             t = torch.as_tensor(tokens)
             print(f"  tokens shape : {tuple(t.shape)}  → (codebooks={t.shape[0]}, frames={t.shape[1]})")
             print(f"  actual IDs   : {t.shape[0] * t.shape[1]}  total IDs stored")
-        print(f"  sample keys  : {list(sample.keys())}")
+        print(f"  label keys   : {list(label.keys())}")
 
     # ── 4. Packed batch inspection ───────────────────────────────────────────
     processor = OmniVoiceSampleProcessor(

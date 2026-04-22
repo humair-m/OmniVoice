@@ -91,14 +91,20 @@ class OmniVoiceSampleProcessor:
 
         # --- Style ---
         style = ""
+        def _clean(val):
+            """Treat Python None and the string 'None' as empty."""
+            if val is None or val == "None":
+                return ""
+            return val
+
         if use_language:
-            language = sample["label"].get("language_id", "None")
+            language = _clean(sample["label"].get("language_id"))
         else:
-            language = "None"
+            language = ""
         if use_instruct:
-            instruct = sample["label"].get("instruct", "None")
+            instruct = _clean(sample["label"].get("instruct"))
         else:
-            instruct = "None"
+            instruct = ""
 
         if "clean_start_token_idx" in sample["label"]:
             style += "<|denoise|>"
