@@ -331,29 +331,6 @@ class OmniTrainer:
 
             batch = _to_device(batch, self.accelerator.device)
 
-            # Debug print to confirm dataset loaded correctly (only print once on resume/start)
-            if self.global_step == logging_start_step and self.tokenizer is not None and self.accelerator.is_main_process:
-                try:
-                    # input_ids shape is typically [1, C, L] or [B, C, L]. 
-                    # We take the first item in batch, and 0th codebook layer which contains text.
-                    first_seq = batch["input_ids"][0, 0, :]
-                    
-                    # Filter out purely padding or audio tokens (audio tokens are usually > tokenizer.vocab_size)
-                    # To be safe, just decode the raw sequence and skip special tokens.
-                    decoded_text = self.tokenizer.decode(
-                        first_seq[first_seq < len(self.tokenizer)].tolist(), 
-                        skip_special_tokens=True
-                    )
-                    
-                    logger.info("="*60)
-                    logger.info(f"✨ DATASET PREVIEW (Step {self.global_step}) ✨")
-                    logger.info(f"Sample Text: {decoded_text[:500]} ...")
-                    logger.info(f"Batch keys: {list(batch.keys())}")
-                    logger.info(f"Input IDs shape: {batch['input_ids'].shape}")
-                    logger.info("="*60)
-                except Exception as e:
-                    logger.warning(f"Failed to print dataset preview: {e}")
-
             with self.accelerator.accumulate(self.model):
                 outputs = self.model(**batch)
                 loss = outputs.loss
