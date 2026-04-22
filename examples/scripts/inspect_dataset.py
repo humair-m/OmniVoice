@@ -28,17 +28,13 @@ from omnivoice.data.collator import PackingDataCollator
 from omnivoice.utils.hf_shards import discover_shards
 
 
-def resolve_tokenizer_path(tc: dict) -> str:
-    """Resolve tokenizer path from train config, handling Hub repo:subfolder syntax."""
-    path = (
-        tc.get("llm_name_or_path")
-        or tc.get("resume_from_checkpoint")
-        or tc.get("init_from_checkpoint")
-    )
+def resolve_tokenizer_path(path: str) -> str:
+    """Resolve tokenizer path: local dir, Hub repo, or Hub repo:subfolder."""
     if not path:
-        print("ERROR: set llm_name_or_path or resume_from_checkpoint in train config.")
+        print("ERROR: provide --tokenizer or set resume_from_checkpoint in train config.")
         sys.exit(1)
 
+    # Handle 'repo_id:subfolder' syntax
     if ":" in path and not path.startswith("/"):
         from huggingface_hub import snapshot_download
         repo_id, subfolder = path.split(":", 1)
@@ -50,10 +46,17 @@ def resolve_tokenizer_path(tc: dict) -> str:
         )
         return os.path.join(local, subfolder)
 
+    # Local path
     expanded = os.path.expanduser(path)
     if os.path.exists(expanded):
         return expanded
 
+    # If it looks like a local path but doesn't exist, error clearly
+    if path.startswith("/") or path.startswith("."):
+        print(f"ERROR: local path not found: {path}")
+        sys.exit(1)
+
+    # Otherwise treat as plain HF Hub repo ID
     from huggingface_hub import snapshot_download
     return snapshot_download(path, token=os.environ.get("HF_TOKEN"))
 
@@ -66,6 +69,12 @@ def main():
         help="HuggingFace dataset repo containing the .tar shards",
     )
     parser.add_argument("--train_config", required=True, help="Path to training config JSON")
+    parser.add_argument(
+        "--tokenizer",
+        default=None,
+        help="Tokenizer source: local path, 'repo_id', or 'repo_id:subfolder'. "
+             "Overrides llm_name_or_path / resume_from_checkpoint in the train config.",
+    )
     parser.add_argument("--num_samples", type=int, default=5,  help="Raw samples to inspect")
     parser.add_argument("--num_batches", type=int, default=2,  help="Packed batches to inspect")
     args = parser.parse_args()
@@ -74,7 +83,14 @@ def main():
         tc = json.load(f)
 
     # ── 1. Tokenizer ────────────────────────────────────────────────────────
-    tokenizer_path = resolve_tokenizer_path(tc)
+    # Priority: --tokenizer CLI arg > resume_from_checkpoint > llm_name_or_path
+    tok_src = (
+        args.tokenizer
+        or tc.get("resume_from_checkpoint")
+        or tc.get("init_from_checkpoint")
+        or tc.get("llm_name_or_path")
+    )
+    tokenizer_path = resolve_tokenizer_path(tok_src)
     print(f"\n{'='*60}")
     print(f"Loading tokenizer from: {tokenizer_path}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
