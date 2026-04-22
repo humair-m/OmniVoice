@@ -331,6 +331,25 @@ class OmniTrainer:
 
             batch = _to_device(batch, self.accelerator.device)
 
+            # --- CLEAN DATASET PREVIEW (Only once at start) ---
+            if self.global_step == logging_start_step and self.tokenizer is not None and self.accelerator.is_main_process:
+                try:
+                    # Filter for text tokens using the audio_mask
+                    first_seq = batch["input_ids"][0, 0, :]   # [L] (codebook 0)
+                    text_mask = ~batch["audio_mask"][0].bool() # True = text position
+                    text_ids = first_seq[text_mask]            # keep only text tokens
+                    
+                    decoded_text = self.tokenizer.decode(text_ids.tolist(), skip_special_tokens=True)
+                    
+                    logger.info("=" * 60)
+                    logger.info(f"✨ DATASET PREVIEW (Step {self.global_step}) ✨")
+                    logger.info(f"Text frames: {text_mask.sum().item()} / {len(text_mask)}")
+                    logger.info(f"Sample Text: {decoded_text[:800]}")
+                    logger.info(f"Batch Shape: {batch['input_ids'].shape}")
+                    logger.info("=" * 60)
+                except Exception as e:
+                    logger.warning(f"Note: Dataset preview skip: {e}")
+
             with self.accelerator.accumulate(self.model):
                 outputs = self.model(**batch)
                 loss = outputs.loss
